@@ -1,0 +1,12 @@
+# Ukryte pliki PlatformIO
+.pio/
+.vscode/
+
+# Pliki kompilatora STM32CubeIDE
+Debug/
+Release/
+*.launch
+
+# Różne systemowe śmieci
+.DS_Store
+Thumbs.db
