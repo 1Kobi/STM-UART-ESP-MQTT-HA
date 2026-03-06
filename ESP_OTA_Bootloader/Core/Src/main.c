@@ -115,6 +115,26 @@ void Erase_Application_Flash(void)
     // 4. Zakładamy kłódkę z powrotem
     HAL_FLASH_Lock();
 }
+
+void Write_Application_Flash(uint32_t start_address, uint8_t *data, uint16_t length)
+{
+    // 1. Otwieramy dostęp do pamięci
+    HAL_FLASH_Unlock();
+
+    // 2. Wypalamy bajt po bajcie (w potężnym STM32F7 robimy to ostrożnie)
+    for (uint16_t i = 0; i < length; i++)
+    {
+        // FLASH_TYPEPROGRAM_BYTE oznacza, że zapisujemy równo 1 bajt (8 bitów)
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, start_address + i, data[i]) != HAL_OK)
+        {
+            printf("BLAD: Zapis do Flash nie powiodl sie na adresie 0x%lX\r\n", start_address + i);
+            break;
+        }
+    }
+
+    // 3. Zamykamy pamięć
+    HAL_FLASH_Lock();
+}
 /* USER CODE END 0 */
 
 /**
@@ -152,46 +172,76 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  // 1. WIZUALNY DOWÓD: Zapalamy NIEBIESKĄ diodę (Bootloader żyje!)
-    HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+    Erase_Application_Flash();
 
-    // 2. LOGI: Wysyłamy tekst przez USB do komputera
-    char msg1[] = "\r\n=== BOOTLOADER START ===\r\nCzekam 2 sekundy...\r\n";
-    HAL_UART_Transmit(&huart3, (uint8_t*)msg1, strlen(msg1), 1000);
+    // WYŚLIJ SYGNAŁ START DO ESP8266
+    uint8_t start_signal = 'S';
+    HAL_UART_Transmit(&huart2, &start_signal, 1, 100);
 
-    HAL_Delay(2000); // 2 sekundy pauzy, żebyś zdążył to zauważyć
+    char msg_wait[] = "Wyslano START. Czekam na dane z ESP...\r\n";
+    HAL_UART_Transmit(&huart3, (uint8_t*)msg_wait, strlen(msg_wait), 1000);
 
-    // 3. Sprawdzamy, czy główna aplikacja istnieje pod adresem 0x08020000
-    if (((*(__IO uint32_t*)MAIN_APP_ADDRESS) & 0xFF000000 ) == 0x20000000)
+    uint8_t rx_byte;
+    uint32_t current_address = MAIN_APP_ADDRESS;
+    uint32_t timeout_counter = 0;
+    uint8_t receiving_active = 0;
+
+    // Odblokowujemy Flash do zapisu
+    HAL_FLASH_Unlock();
+
+    while(1)
       {
-        char msg2[] = "Aplikacja znaleziona! Skok za 3... 2... 1...\r\n";
-        HAL_UART_Transmit(&huart3, (uint8_t*)msg2, strlen(msg2), 1000);
+          if (HAL_UART_Receive(&huart2, &rx_byte, 1, 10) == HAL_OK)
+          {
+              receiving_active = 1;
+              HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, current_address, rx_byte);
+              current_address++;
+              timeout_counter = 0;
+          }
+          else
+          {
+              timeout_counter++;
+              // Jeśli dane już płynęły, czekamy 3 sekundy na koniec (300 * 10ms)
+              if (receiving_active == 1 && timeout_counter > 300) break;
+              // Jeśli dane jeszcze NIE zaczęły płynąć, czekamy do 60 sekund na start (6000 * 10ms)
+              if (receiving_active == 0 && timeout_counter > 6000) break;
+          }
+      }
+      HAL_FLASH_Lock();
 
-        // Gasimy niebieską diodę przed skokiem
-        HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+    // ==========================================================
+    // 4. SPRAWDZENIE APLIKACJI I SKOK (Twój stary kod)
+    // ==========================================================
+    if (((*(__IO uint32_t*)MAIN_APP_ADDRESS) & 0xFF000000 ) == 0x20000000)
+    {
+        char msg_jump[] = "Aplikacja poprawna! Skok za 3... 2... 1...\r\n";
+        HAL_UART_Transmit(&huart3, (uint8_t*)msg_jump, strlen(msg_jump), 1000);
+
+        HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET); // Gasimy diodę przed skokiem
+        HAL_Delay(1000);
 
         uint32_t JumpAddress = *(__IO uint32_t*) (MAIN_APP_ADDRESS + 4);
         pFunction JumpToApplication = (pFunction) JumpAddress;
 
-        // ==========================================================
-        // INŻYNIERSKIE SPRZĄTANIE (BARDZO WAŻNE DLA RTOS!)
-        // ==========================================================
+        // Sprzątanie procesora
         HAL_UART_DeInit(&huart3);
+        HAL_UART_DeInit(&huart2); // Odłączamy też UART od ESP
         HAL_RCC_DeInit();
         HAL_DeInit();
         SysTick->CTRL = 0;
         SysTick->LOAD = 0;
         SysTick->VAL = 0;
-        __disable_irq(); // Wyłączamy globalne przerwania, żeby nic nie zepsuło skoku!
+        __disable_irq();
 
-        // Ustawienie wskaźnika stosu i SKOK
+        // Skok
         __set_MSP(*(__IO uint32_t*) MAIN_APP_ADDRESS);
         JumpToApplication();
     }
     else
     {
-        char msg3[] = "BRAK APLIKACJI! Zostaje w Bootloaderze.\r\n";
-        HAL_UART_Transmit(&huart3, (uint8_t*)msg3, strlen(msg3), 1000);
+        char msg_err[] = "BRAK APLIKACJI! Zostaje w Bootloaderze.\r\n";
+        HAL_UART_Transmit(&huart3, (uint8_t*)msg_err, strlen(msg_err), 1000);
     }
 
   /* USER CODE END 2 */
@@ -200,6 +250,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -329,7 +380,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 9600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
