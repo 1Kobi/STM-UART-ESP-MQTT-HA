@@ -3,11 +3,11 @@
 #include <ESP8266WiFi.h>
 #include <SoftwareSerial.h>
 
-const char* ssid = "T-Mobile_Swiatlowod_8150";
-const char* password = "71038828757389562047";
-const char* mqtt_server = "192.168.1.21";
-const char* mqtt_user = "esp8266";
-const char* mqtt_pass = "321esp123";
+const char* ssid = "xxx";
+const char* password = "xxx";
+const char* mqtt_server = "xxx";
+const char* mqtt_user = "xxx";
+const char* mqtt_pass = "xxx";
 
 const char* topic_telemetry = "moj_dom/salon/telemetria/stm32";
 
