@@ -67,8 +67,11 @@ ETH_HandleTypeDef heth;
 
 I2C_HandleTypeDef hi2c1;
 
+IWDG_HandleTypeDef hiwdg;
+
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
+DMA_HandleTypeDef hdma_usart2_tx;
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
@@ -92,17 +95,20 @@ const osMessageQueueAttr_t TempQueue_attributes = {
   .name = "TempQueue"
 };
 /* USER CODE BEGIN PV */
+char uart_buf_dma[50];
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ETH_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_IWDG_Init(void);
 void StartTempTask(void *argument);
 void StartUartTask(void *argument);
 
@@ -123,8 +129,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	SCB->VTOR = 0x08020000;
-	__enable_irq();
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -145,11 +150,13 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ETH_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_I2C1_Init();
   MX_USART2_UART_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
   BMP280_Init(&hi2c1);
 
@@ -230,8 +237,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 4;
@@ -364,6 +372,35 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief IWDG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_IWDG_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG_Init 0 */
+
+  /* USER CODE END IWDG_Init 0 */
+
+  /* USER CODE BEGIN IWDG_Init 1 */
+
+  /* USER CODE END IWDG_Init 1 */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_32;
+  hiwdg.Init.Window = 4095;
+  hiwdg.Init.Reload = 4095;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG_Init 2 */
+
+  /* USER CODE END IWDG_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -379,7 +416,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 9600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -414,7 +451,7 @@ static void MX_USART3_UART_Init(void)
 
   /* USER CODE END USART3_Init 1 */
   huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
+  huart3.Init.BaudRate = 9600;
   huart3.Init.WordLength = UART_WORDLENGTH_8B;
   huart3.Init.StopBits = UART_STOPBITS_1;
   huart3.Init.Parity = UART_PARITY_NONE;
@@ -465,6 +502,22 @@ static void MX_USB_OTG_FS_PCD_Init(void)
   /* USER CODE BEGIN USB_OTG_FS_Init 2 */
 
   /* USER CODE END USB_OTG_FS_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream6_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream6_IRQn);
 
 }
 
@@ -545,7 +598,8 @@ void StartTempTask(void *argument)
 	float aktualna_temperatura = BMP280_ReadTemperature(&hi2c1);
 	osMessageQueuePut(TempQueueHandle, &aktualna_temperatura, 0, osWaitForever);
 
-    osDelay(1000);
+	HAL_IWDG_Refresh(&hiwdg);
+    osDelay(3000);
   }
   /* USER CODE END 5 */
 }
@@ -560,16 +614,17 @@ void StartTempTask(void *argument)
 void StartUartTask(void *argument)
 {
   /* USER CODE BEGIN StartUartTask */
-	char uart_buf[50];
 	float odebrana_temperatura = 0.0f;
+
   /* Infinite loop */
   for(;;)
   {
 	if(osMessageQueueGet(TempQueueHandle, &odebrana_temperatura, NULL, osWaitForever) == osOK)
 	{
-		snprintf(uart_buf, sizeof(uart_buf), "{\"temperature\": %.2f}\n", odebrana_temperatura);
-		HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, strlen(uart_buf), 100);
-		HAL_UART_Transmit(&huart3, (uint8_t*)uart_buf, strlen(uart_buf), 100);
+
+		snprintf(uart_buf_dma, sizeof(uart_buf_dma), "{\"temperature\": %.2f}\n", odebrana_temperatura);
+		HAL_UART_Transmit_DMA(&huart2, (uint8_t*)uart_buf_dma, strlen(uart_buf_dma));
+		HAL_UART_Transmit(&huart3, (uint8_t*)uart_buf_dma, strlen(uart_buf_dma), 100);
 		HAL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin);
 	}
   }
